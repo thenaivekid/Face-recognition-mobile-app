@@ -16,10 +16,20 @@ class _HomePageState extends State<HomePage> {
   String result = "Ashok is awesome";
   CameraController? cameraController;
   CameraImage? imgCamera;
+  CameraDescription? currentCamera;
 
   @override
   void initState() {
     super.initState();
+    availableCameras().then((cameras) {
+      print("Available cameras:");
+      cameras.forEach((camera) {
+        print('Camera name: ${camera.name}');
+        print('Camera lens direction: ${camera.lensDirection}');
+      });
+    }).catchError((error) {
+      print('Error fetching cameras: $error');
+    });
     loadModel();
     initCamera();
   }
@@ -80,16 +90,12 @@ class _HomePageState extends State<HomePage> {
       return;
     }
 
+    currentCamera = widget.cameras.first;
     cameraController =
-        CameraController(widget.cameras[0], ResolutionPreset.medium);
+        CameraController(currentCamera!, ResolutionPreset.medium);
     cameraController!.initialize().then((_) {
       if (!mounted) return;
-      setState(() {
-        cameraController!.startImageStream((imageFromStream) {
-          print("run model");
-          runModelOnFrame(imageFromStream);
-        });
-      });
+      setState(() {});
     }).catchError((Object e) {
       if (e is CameraException) {
         switch (e.code) {
@@ -102,6 +108,38 @@ class _HomePageState extends State<HomePage> {
         }
       }
     });
+  }
+
+  void flipCamera() {
+    if (widget.cameras.length < 2) {
+      print("Only one camera available");
+      return;
+    }
+
+    setState(() {
+      currentCamera = (currentCamera == widget.cameras.first)
+          ? widget.cameras[1]
+          : widget.cameras.first;
+    });
+    print("switched to cam $currentCamera");
+
+    cameraController?.dispose();
+    initCamera();
+  }
+
+  captureImage() async {
+    if (!cameraController!.value.isInitialized || isWorking) return;
+
+    try {
+      cameraController!.startImageStream((imageFromStream) async {
+        cameraController!.stopImageStream();
+        imgCamera = imageFromStream;
+        runModelOnFrame(imgCamera!);
+        print("image captured form cam $currentCamera");
+      });
+    } catch (e) {
+      print("Error capturing image: $e");
+    }
   }
 
   @override
@@ -120,10 +158,8 @@ class _HomePageState extends State<HomePage> {
       child: Scaffold(
         body: Column(
           children: [
-            SizedBox(height: 20), // Add some top padding
+            SizedBox(height: 20),
             Container(
-              // width: 300, // Set a fixed width
-              // height: 300, // Set a fixed height (1:1 aspect ratio)
               decoration: BoxDecoration(
                 border: Border.all(color: Colors.blue, width: 2),
                 borderRadius: BorderRadius.circular(10),
@@ -133,8 +169,7 @@ class _HomePageState extends State<HomePage> {
                 child: CameraPreview(cameraController!),
               ),
             ),
-            Expanded(
-                child: SizedBox()), // This will push the result to the bottom
+            Expanded(child: SizedBox()),
             Container(
               padding: EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -147,7 +182,39 @@ class _HomePageState extends State<HomePage> {
                     const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
               ),
             ),
-            SizedBox(height: 20), // Add some bottom padding
+            SizedBox(height: 20),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton(
+                  onPressed: captureImage,
+                  style: ElevatedButton.styleFrom(
+                    shape: CircleBorder(),
+                    padding: EdgeInsets.all(16),
+                  ),
+                  child: Icon(Icons.add, size: 52),
+                ),
+                SizedBox(width: 20),
+                ElevatedButton(
+                  onPressed: captureImage,
+                  style: ElevatedButton.styleFrom(
+                    shape: CircleBorder(),
+                    padding: EdgeInsets.all(16),
+                  ),
+                  child: Icon(Icons.camera_alt, size: 52),
+                ),
+                SizedBox(width: 20),
+                ElevatedButton(
+                  onPressed: flipCamera,
+                  style: ElevatedButton.styleFrom(
+                    shape: CircleBorder(),
+                    padding: EdgeInsets.all(16),
+                  ),
+                  child: Icon(Icons.flip_camera_ios, size: 52),
+                ),
+              ],
+            ),
+            SizedBox(height: 20),
           ],
         ),
       ),
