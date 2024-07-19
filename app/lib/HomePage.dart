@@ -1,6 +1,10 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:tflite/tflite.dart';
+import 'package:path/path.dart';
+import 'package:sqflite/sqflite.dart';
+import 'package:image/image.dart' as img;
 
 class HomePage extends StatefulWidget {
   final List<CameraDescription> cameras;
@@ -13,78 +17,44 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   bool isWorking = false;
-  String result = "Ashok is awesome";
+  String result = "Ready";
   CameraController? cameraController;
-  CameraImage? imgCamera;
   CameraDescription? currentCamera;
+  late Database database;
 
   @override
   void initState() {
     super.initState();
-    availableCameras().then((cameras) {
-      print("Available cameras:");
-      cameras.forEach((camera) {
-        print('Camera name: ${camera.name}');
-        print('Camera lens direction: ${camera.lensDirection}');
-      });
-    }).catchError((error) {
-      print('Error fetching cameras: $error');
-    });
+    initializeDatabase();
     loadModel();
     initCamera();
   }
 
-  loadModel() async {
+  Future<void> initializeDatabase() async {
+    database = await openDatabase(
+      join(await getDatabasesPath(), 'face_recognition.db'),
+      onCreate: (db, version) {
+        return db.execute(
+          'CREATE TABLE persons(id INTEGER PRIMARY KEY, name TEXT, embedding BLOB)',
+        );
+      },
+      version: 1,
+    );
+  }
+
+  Future<void> loadModel() async {
     try {
       await Tflite.loadModel(
-        model: "assets/mobilenet_v1_1.0_224.tflite",
-        labels: "assets/mobilenet_v1_1.0_224.txt",
+        model: "assets/siamese_model_quant.tflite",
+        labels: "", // Provide an empty string if no labels are used
       );
-      print("Model loaded successfully");
+      print("Siamese model loaded successfully");
     } catch (e) {
       print("Failed to load model: $e");
     }
   }
 
-  runModelOnFrame(CameraImage img) async {
-    if (isWorking) return;
-    isWorking = true;
-
-    try {
-      var recognitions = await Tflite.runModelOnFrame(
-        bytesList: img.planes.map((plane) => plane.bytes).toList(),
-        imageHeight: img.height,
-        imageWidth: img.width,
-        imageMean: 127.5,
-        imageStd: 127.5,
-        rotation: 90,
-        numResults: 1,
-        threshold: 0.1,
-      );
-
-      print("Recognitions: $recognitions");
-
-      setState(() {
-        if (recognitions != null && recognitions.isNotEmpty) {
-          result =
-              "${recognitions[0]['label']} - ${(recognitions[0]['confidence'] * 100).toStringAsFixed(0)}%";
-        } else {
-          result = "Ashok is awesome";
-        }
-      });
-
-      print("Current result: $result");
-    } catch (e) {
-      print("Error running model: $e");
-      setState(() {
-        result = "Error: $e";
-      });
-    }
-
-    isWorking = false;
-  }
-
-  initCamera() {
+  void initCamera() {
     if (widget.cameras.isEmpty) {
       print("No camera found");
       return;
@@ -127,25 +97,159 @@ class _HomePageState extends State<HomePage> {
     initCamera();
   }
 
-  captureImage() async {
-    if (!cameraController!.value.isInitialized || isWorking) return;
+  Future<void> promptNewPerson(BuildContext context) async {
+    final name = await _showNameInputDialog(context);
+
+    if (name != null && name.isNotEmpty) {
+      addNewPerson(name);
+    }
+  }
+
+  Future<void> addNewPerson(String name) async {
+    if (!cameraController!.value.isInitialized) return;
 
     try {
-      cameraController!.startImageStream((imageFromStream) async {
-        cameraController!.stopImageStream();
-        imgCamera = imageFromStream;
-        runModelOnFrame(imgCamera!);
-        print("image captured form cam $currentCamera");
+      final image = await cameraController!.takePicture();
+      await _savePersonToDB(image, name);
+      setState(() {
+        result = "Added new person: $name";
+      });
+      print("Added new person: $name");
+    } catch (e) {
+      print("Error adding new person: $e");
+      setState(() {
+        result = "Error adding new person";
+      });
+    }
+  }
+
+  Future<String?> _showNameInputDialog(BuildContext context) async {
+    String? name;
+    await showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text("New Person"),
+          content: TextField(
+            onChanged: (value) {
+              name = value;
+            },
+            decoration: InputDecoration(hintText: "Enter name"),
+          ),
+          actions: [
+            TextButton(
+              child: Text("Cancel"),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: Text("Save"),
+              onPressed: () {
+                Navigator.of(context).pop(name);
+              },
+            ),
+          ],
+        );
+      },
+    );
+    return name;
+  }
+
+  Future<void> _savePersonToDB(XFile image, String name) async {
+    final embedding = await computeEmbedding(image);
+
+    await database.insert(
+      'persons',
+      {
+        'name': name,
+        'embedding': embedding.buffer.asUint8List(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<Float32List> computeEmbedding(XFile image) async {
+    final imageBytes = await image.readAsBytes();
+    final decodedImage = img.decodeImage(imageBytes);
+    final resizedImage = img.copyResize(decodedImage!, width: 128, height: 128);
+
+    final inputBytes = Float32List(1 * 128 * 128 * 3);
+    int pixelIndex = 0;
+    for (var y = 0; y < 128; y++) {
+      for (var x = 0; x < 128; x++) {
+        var pixel = resizedImage.getPixel(x, y);
+        inputBytes[pixelIndex++] = pixel.r / 255.0;
+        inputBytes[pixelIndex++] = pixel.g / 255.0;
+        inputBytes[pixelIndex++] = pixel.b / 255.0;
+      }
+    }
+
+    var output = await Tflite.runModelOnBinary(
+      binary: inputBytes.buffer.asUint8List(),
+      numResults: 256,
+      threshold: 0.5,
+    );
+
+    if (output != null && output.isNotEmpty) {
+      List<double> outputList =
+          List<double>.from(output.map((e) => e['output']).expand((e) => e));
+      return Float32List.fromList(outputList);
+    } else {
+      throw Exception("Model output is empty");
+    }
+  }
+
+  Future<void> recognizeFace() async {
+    if (!cameraController!.value.isInitialized) return;
+
+    try {
+      final image = await cameraController!.takePicture();
+      final embedding = await computeEmbedding(image);
+      final recognizedPerson = await findClosestMatch(embedding);
+      setState(() {
+        result = recognizedPerson ?? "Unknown person";
       });
     } catch (e) {
-      print("Error capturing image: $e");
+      print("Error recognizing face: $e");
+      setState(() {
+        result = "Error recognizing face";
+      });
     }
+  }
+
+  Future<String?> findClosestMatch(Float32List embedding) async {
+    final List<Map<String, dynamic>> persons = await database.query('persons');
+    double closestDistance = double.infinity;
+    String? closestPerson;
+
+    for (var person in persons) {
+      final storedEmbedding =
+          Float32List.fromList(List<double>.from(person['embedding']));
+      final distance = computeDistance(embedding, storedEmbedding);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestPerson = person['name'];
+      }
+    }
+
+    // You might want to set a threshold for the closest distance
+    return closestDistance < 0.6 ? closestPerson : null;
+  }
+
+  double computeDistance(Float32List embedding1, Float32List embedding2) {
+    double sum = 0;
+    for (int i = 0; i < embedding1.length; i++) {
+      sum += (embedding1[i] - embedding2[i]) * (embedding1[i] - embedding2[i]);
+    }
+    return sum;
   }
 
   @override
   void dispose() {
     cameraController?.dispose();
     Tflite.close();
+    database.close();
     super.dispose();
   }
 
@@ -187,7 +291,7 @@ class _HomePageState extends State<HomePage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 ElevatedButton(
-                  onPressed: captureImage,
+                  onPressed: () => promptNewPerson(context),
                   style: ElevatedButton.styleFrom(
                     shape: CircleBorder(),
                     padding: EdgeInsets.all(16),
@@ -196,7 +300,7 @@ class _HomePageState extends State<HomePage> {
                 ),
                 SizedBox(width: 20),
                 ElevatedButton(
-                  onPressed: captureImage,
+                  onPressed: recognizeFace,
                   style: ElevatedButton.styleFrom(
                     shape: CircleBorder(),
                     padding: EdgeInsets.all(16),

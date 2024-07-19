@@ -33,6 +33,10 @@ dependencies:
 
   camera:
   tflite: ^1.1.2
+  path:
+  image:
+  sqflite:
+
 
 
   # The following adds the Cupertino Icons font to your application.
@@ -67,6 +71,7 @@ flutter:
     - assets/robot.jpeg
     - assets/robot1.jpg
     - assets/mobilenet_v1_1.0_224.tflite
+    - assets/siamese_model_quant.tflite
     - assets/mobilenet_v1_1.0_224.txt
 
 
