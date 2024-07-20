@@ -10,7 +10,6 @@ import 'package:tflite_flutter/tflite_flutter.dart';
 
 class HomePage extends StatefulWidget {
   final List<CameraDescription> cameras;
-
   const HomePage({Key? key, required this.cameras}) : super(key: key);
 
   @override
@@ -24,7 +23,7 @@ class _HomePageState extends State<HomePage> {
   CameraDescription? currentCamera;
   late Database database;
   CameraImage? imgCamera;
-  // late var interpreter;
+  late Interpreter interpreter;
   @override
   void initState() {
     super.initState();
@@ -43,11 +42,12 @@ class _HomePageState extends State<HomePage> {
       },
       version: 1,
     );
+    print("database initialized");
   }
 
   Future<void> loadModel() async {
     try {
-      final interpreter = await Interpreter.fromAsset('assets/facenet.tflite');
+      interpreter = await Interpreter.fromAsset('assets/facenet.tflite');
 
       print("Siamese model loaded successfully");
     } catch (e) {
@@ -99,10 +99,12 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> promptNewPerson(BuildContext context) async {
+    // clearPersonsDB();
     final name = await _showNameInputDialog(context);
-
+    print("name input $name");
     if (name != null && name.isNotEmpty) {
       captureImage(); // Capture image and add the new person
+      addNewPerson(name);
     }
   }
 
@@ -110,7 +112,7 @@ class _HomePageState extends State<HomePage> {
     if (imgCamera == null) return;
 
     try {
-      final embedding = await computeEmbedding(imgCamera!);
+      final embedding = await computeEmbedding();
       await _savePersonToDB(embedding, name);
       setState(() {
         result = "Added new person: $name";
@@ -157,95 +159,132 @@ class _HomePageState extends State<HomePage> {
     return name;
   }
 
-  Future<void> _savePersonToDB(Float32List embedding, String name) async {
+Future<void> _savePersonToDB(Float32List embedding, String name) async {
+    String embeddingString = embedding.join(',');
     await database.insert(
       'persons',
       {
         'name': name,
-        'embedding': embedding.buffer.asUint8List(),
+        'embedding': embeddingString,
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
 
-  Future<Float32List> computeEmbedding(CameraImage image) async {
-    print("image format $image.Format.group");
-    return Float32List.fromList([2, 3, 3]);
-    // final inputBytes = Float32List(1 * 128 * 128 * 3);
-    // int pixelIndex = 0;
-    // for (var y = 0; y < 128; y++) {
-    //   for (var x = 0; x < 128; x++) {
-    //     var pixel = resizedImage.getPixel(x, y);
-    //     inputBytes[pixelIndex++] = pixel.r / 255.0;
-    //     inputBytes[pixelIndex++] = pixel.g / 255.0;
-    //     inputBytes[pixelIndex++] = pixel.b / 255.0;
-    //   }
-//     }
-// // https://pub.dev/documentation/tflite/latest/
-//     var output = await Tflite.runModelOnBinary(
-//       binary: inputBytes.buffer.asUint8List(),
-//       numResults: 256,
-//       threshold: 0.5,
-//     );
+  Future<void> clearPersonsDB() async {
+    try {
+      // Delete all rows in the 'persons' table
+      await database.delete('persons');
+      print('All data cleared from persons table');
+    } catch (e) {
+      print('Error clearing persons table: $e');
+    }
+  }
 
-//     if (output != null && output.isNotEmpty) {
-//       List<double> outputList =
-//           List<double>.from(output.map((e) => e['output']).expand((e) => e));
-//       return Float32List.fromList(outputList);
-//     } else {
-//       throw Exception("Model output is empty");
-//     }
+  Future<void> fetchAllPeople() async {
+    // <List<Map<String, dynamic>>>
+    final List<Map<String, dynamic>> people = await database.query('persons');
+    people.forEach((person) {
+      print('ID: ${person['id']}, Name: ${person['name']}');
+    });
+
+    // return await database.query('persons');
+  }
+
+  Future<Float32List> computeEmbedding() async {
+    captureImage();
+
+    img.Image image = convertYUV420ToImage(imgCamera!);
+    final imageInput = img.copyResize(
+      image!,
+      width: 300,
+      height: 300,
+    );
+
+    // Creating matrix representation, [300, 300, 3]
+    final imageMatrix = List.generate(
+      imageInput.height,
+      (y) => List.generate(
+        imageInput.width,
+        (x) {
+          final pixel = imageInput.getPixel(x, y);
+          return [pixel.r, pixel.g, pixel.b];
+        },
+      ),
+    );
+
+    print("input $imageMatrix");
+// if output tensor shape [1,2] and type is float32
+    // var output = List.filled(1 * 128, 0).reshape([1, 128]);
+    var output =
+        List<List<double>>.generate(1, (_) => List<double>.filled(128, 0.0));
+// inference
+    interpreter.run([imageMatrix], output);
+    print("output");
+// print the output
+    print(output);
+    Float32List float32Output =
+        Float32List.fromList(output.expand((element) => element).toList());
+    return float32Output;
+  }
+
+  img.Image convertYUV420ToImage(CameraImage cameraImage) {
+    final width = cameraImage.width;
+    final height = cameraImage.height;
+
+    final uvRowStride = cameraImage.planes[1].bytesPerRow;
+    final uvPixelStride = cameraImage.planes[1].bytesPerPixel!;
+
+    final yPlane = cameraImage.planes[0].bytes;
+    final uPlane = cameraImage.planes[1].bytes;
+    final vPlane = cameraImage.planes[2].bytes;
+
+    final image = img.Image(width: width, height: height);
+
+    var uvIndex = 0;
+
+    for (var y = 0; y < height; y++) {
+      var pY = y * width;
+      var pUV = uvIndex;
+
+      for (var x = 0; x < width; x++) {
+        final yValue = yPlane[pY];
+        final uValue = uPlane[pUV];
+        final vValue = vPlane[pUV];
+
+        final r = yValue + 1.402 * (vValue - 128);
+        final g =
+            yValue - 0.344136 * (uValue - 128) - 0.714136 * (vValue - 128);
+        final b = yValue + 1.772 * (uValue - 128);
+
+        image.setPixelRgba(x, y, r.toInt(), g.toInt(), b.toInt(), 1);
+
+        pY++;
+        if (x % 2 == 1 && uvPixelStride == 2) {
+          pUV += uvPixelStride;
+        } else if (x % 2 == 1 && uvPixelStride == 1) {
+          pUV++;
+        }
+      }
+
+      if (y % 2 == 1) {
+        uvIndex += uvRowStride;
+      }
+    }
+    return image;
   }
 
   Future<void> recognizeFace() async {
-    if (!cameraController!.value.isInitialized || isWorking) return;
+    print("people");
+    fetchAllPeople();
+    var output = await computeEmbedding();
+    print("encoded");
+    var recognized = findClosestMatch(output);
 
-    try {
-      // await loadModel();
-      var interpreter = await Interpreter.fromAsset('assets/facenet.tflite');
-
-      print("Siamese model loaded successfully");
-      List<List<List<List<double>>>> generateRandomData(
-          int n, int h, int w, int c) {
-        final random = Random();
-        return List.generate(
-            n,
-            (_) => List.generate(
-                h,
-                (_) => List.generate(
-                    w, (_) => List.generate(c, (_) => random.nextDouble()))));
-      }
-
-      // For ex: if input tensor shape [1,5] and type is float32
-      final input = generateRandomData(1, 128, 128, 3);
-
-// if output tensor shape [1,2] and type is float32
-      var output = List.filled(1 * 128, 0).reshape([1, 128]);
-
-// inference
-      interpreter.run(input, output);
-      print("output");
-// print the output
-      print(output);
-      // cameraController!.startImageStream((imageFromStream) async {
-      //   cameraController!.stopImageStream();
-      //   print("image from stream $imageFromStream");
-      //   // List<double> preprocessedImage =
-      //   //     await processCameraImage(imageFromStream);
-
-      //   imgCamera = imageFromStream;
-      //   final embedding = await computeEmbedding(imgCamera!);
-      //   final recognizedPerson = await findClosestMatch(embedding);
-      //   setState(() {
-      //     result = recognizedPerson ?? "Unknown person";
-      //   });
-      // });
-    } catch (e) {
-      print("Error recognizing face: $e");
-      setState(() {
-        result = "Error recognizing face";
-      });
-    }
+    // setState(() {
+    //   result = "$recognized";
+    // });
+    return;
   }
 
   Future<String?> findClosestMatch(Float32List embedding) async {
@@ -254,8 +293,19 @@ class _HomePageState extends State<HomePage> {
     String? closestPerson;
 
     for (var person in persons) {
-      final storedEmbedding =
-          Float32List.fromList(List<double>.from(person['embedding']));
+      String embeddingString = person["embedding"] as String;
+      List<double> embeddingList = embeddingString
+          .split(',')
+          .map((e) => double.parse(e.trim()))
+          .toList();
+      Float32List storedEmbedding = Float32List.fromList(embeddingList);
+
+      if (storedEmbedding.length != embedding.length) {
+        print(
+            "Warning: Stored embedding length (${storedEmbedding.length}) does not match input embedding length (${embedding.length}) for person: ${person['name']}");
+        continue; // Skip this person
+      }
+
       final distance = computeDistance(embedding, storedEmbedding);
       if (distance < closestDistance) {
         closestDistance = distance;
@@ -263,6 +313,10 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
+    print("closest person $closestPerson");
+    setState(() {
+      result = "$closestPerson";
+    });
     // You might want to set a threshold for the closest distance
     return closestDistance < 0.6 ? closestPerson : null;
   }
@@ -282,8 +336,6 @@ class _HomePageState extends State<HomePage> {
       cameraController!.startImageStream((imageFromStream) async {
         cameraController!.stopImageStream();
         imgCamera = imageFromStream;
-        await addNewPerson("name"); // You can change "name" to the desired name
-        print("Image captured from cam $currentCamera");
       });
     } catch (e) {
       print("Error capturing image: $e");

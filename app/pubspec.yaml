@@ -71,7 +71,6 @@ flutter:
     - assets/robot.jpeg
     - assets/robot1.jpg
     - assets/mobilenet_v1_1.0_224.tflite
-    - assets/siamese_model_quant.tflite
     - assets/facenet.tflite
     - assets/mobilenet_v1_1.0_224.txt
 
