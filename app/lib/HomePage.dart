@@ -126,37 +126,53 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  Future<String?> _showNameInputDialog(BuildContext context) async {
+Future<String?> _showNameInputDialog(BuildContext context) async {
     String? name;
-    await showDialog(
+    return await showDialog<String>(
       context: context,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text("New Person"),
-          content: TextField(
-            onChanged: (value) {
-              name = value;
-            },
-            decoration: InputDecoration(hintText: "Enter name"),
+        return Dialog(
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Text(
+                  "New Person",
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 20),
+                TextField(
+                  onChanged: (value) {
+                    name = value;
+                  },
+                  decoration: InputDecoration(hintText: "Enter name"),
+                ),
+                SizedBox(height: 20),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: <Widget>[
+                    TextButton(
+                      child: Text("Cancel"),
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                    ),
+                    SizedBox(width: 8),
+                    TextButton(
+                      child: Text("Save"),
+                      onPressed: () {
+                        Navigator.of(context).pop(name);
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
-          actions: [
-            TextButton(
-              child: Text("Cancel"),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: Text("Save"),
-              onPressed: () {
-                Navigator.of(context).pop(name);
-              },
-            ),
-          ],
         );
       },
     );
-    return name;
   }
 
 Future<void> _savePersonToDB(Float32List embedding, String name) async {
@@ -357,6 +373,7 @@ Future<void> _savePersonToDB(Float32List embedding, String name) async {
     }
     return SafeArea(
       child: Scaffold(
+        resizeToAvoidBottomInset: false,
         body: Column(
           children: [
             SizedBox(height: 20),
