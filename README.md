@@ -1,1 +1,2 @@
-# Home-Intruder-Recognition-AI-in-Old-Phone
+# Face recognition mobile with custom trained siamese neural network
+
