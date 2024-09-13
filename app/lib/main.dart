@@ -9,6 +9,7 @@ Future<void> main() async {
 
   try {
     cameras = await availableCameras();
+    print("available cameras: $cameras");
   } on CameraException catch (e) {
     print('Error in fetching the cameras: $e');
   }
@@ -27,7 +28,9 @@ class MyApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: HomePage(cameras: cameras,),
+      home: HomePage(
+        cameras: cameras,
+      ),
     );
   }
 }

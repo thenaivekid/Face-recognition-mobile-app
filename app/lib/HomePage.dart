@@ -21,6 +21,7 @@ class _HomePageState extends State<HomePage> {
   String result = "Ready";
   CameraController? cameraController;
   CameraDescription? currentCamera;
+  int currentCameraIndex = 0;
   late Database database;
   CameraImage? imgCamera;
   late Interpreter interpreter;
@@ -60,8 +61,7 @@ class _HomePageState extends State<HomePage> {
       print("No camera found");
       return;
     }
-
-    currentCamera = widget.cameras.first;
+    currentCamera = widget.cameras[currentCameraIndex];
     cameraController =
         CameraController(currentCamera!, ResolutionPreset.medium);
     cameraController!.initialize().then((_) {
@@ -82,28 +82,28 @@ class _HomePageState extends State<HomePage> {
   }
 
   void flipCamera() {
-    if (widget.cameras.length < 2) {
-      print("Only one camera available");
+    if (widget.cameras.isEmpty) {
+      print("No cameras available");
       return;
     }
 
     setState(() {
-      currentCamera = (currentCamera == widget.cameras.first)
-          ? widget.cameras[1]
-          : widget.cameras.first;
+      // Increment the index to switch to the next camera
+      currentCameraIndex = (currentCameraIndex + 1) % widget.cameras.length;
+      currentCamera = widget.cameras[currentCameraIndex];
     });
-    print("switched to cam $currentCamera");
 
+    print("Switched to camera: $currentCameraIndex");
+
+    // Dispose of the old camera controller and initialize a new one
     cameraController?.dispose();
     initCamera();
   }
 
   Future<void> promptNewPerson(BuildContext context) async {
-    // clearPersonsDB();
     final name = await _showNameInputDialog(context);
     print("name input $name");
     if (name != null && name.isNotEmpty) {
-      captureImage(); // Capture image and add the new person
       addNewPerson(name);
     }
   }
@@ -126,7 +126,7 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-Future<String?> _showNameInputDialog(BuildContext context) async {
+  Future<String?> _showNameInputDialog(BuildContext context) async {
     String? name;
     return await showDialog<String>(
       context: context,
@@ -160,7 +160,7 @@ Future<String?> _showNameInputDialog(BuildContext context) async {
                     ),
                     SizedBox(width: 8),
                     TextButton(
-                      child: Text("Save"),
+                      child: Text("Take photo"),
                       onPressed: () {
                         Navigator.of(context).pop(name);
                       },
@@ -175,7 +175,7 @@ Future<String?> _showNameInputDialog(BuildContext context) async {
     );
   }
 
-Future<void> _savePersonToDB(Float32List embedding, String name) async {
+  Future<void> _savePersonToDB(Float32List embedding, String name) async {
     String embeddingString = embedding.join(',');
     await database.insert(
       'persons',
